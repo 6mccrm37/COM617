@@ -26,7 +26,7 @@ with open(s.write_input_file()) as f:
 print("\n=== SixS Full Output ===")
 print(s.outputs.fulltext)
 
-# ✅ Print key outputs
+# Print key outputs
 print("\n=== Key Outputs ===")
 print(f"Apparent Reflectance: {s.outputs.apparent_reflectance}")
 print(f"Apparent Radiance: {s.outputs.apparent_radiance}")
