@@ -10,6 +10,7 @@ import logging
 import csv
 import os
 from datetime import datetime
+import sys
 
 # Create FastAPI app first
 app = FastAPI()
@@ -60,10 +61,19 @@ def setup_model(lat: float, date: str, ground_type=GroundReflectance.GreenVegeta
 # Model runner function
 def run_model(s: SixS, sensor: str):
     try:
+        logging.info(f"Python exec path: {sys.executable}")
+        logging.info(f"SixS path: {sixs_exe_path}")
+        logging.info(f"SixS path exists: {sixs_exe_path.exists()}")
+        logging.info("Attempting to run Py6S...")
+
         s.run()
 
         if s.outputs is None:
-            return {"error": "Py6S failed to produce output — check parameter values or SixS path."}
+            logging.error("Py6S run completed but outputs are None. Possible input or SixS path error.")
+            return {"error": "Py6S did not return any outputs. Please check your SixS executable or input parameters."}
+
+        saved_outputs = s.outputs  # Save outputs before helper overwrites them
+        logging.info("Py6S returned outputs: Reflectance = %s", saved_outputs.apparent_reflectance)
 
         if sensor == "landsat_etm":
             wavelengths, radiance = SixSHelpers.Wavelengths.run_landsat_etm(s, output_name='apparent_radiance')
@@ -73,12 +83,12 @@ def run_model(s: SixS, sensor: str):
             return {"error": "Unsupported sensor type"}
 
         return {
-            "wavelengths": wavelengths,
-            "radiance": radiance,
+            "wavelengths": list(wavelengths),
+            "radiance": list(radiance),
             "key_outputs": {
-                "apparent_reflectance": s.outputs.apparent_reflectance,
-                "apparent_radiance": s.outputs.apparent_radiance,
-                "water_vapour_transmittance_downward": s.outputs.transmittance_water.downward
+                "apparent_reflectance": float(saved_outputs.apparent_reflectance),
+                "apparent_radiance": float(saved_outputs.apparent_radiance),
+                "water_vapour_transmittance_downward": float(saved_outputs.transmittance_water.downward)
             }
         }
     except Exception as e:

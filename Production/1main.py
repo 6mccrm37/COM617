@@ -3,6 +3,14 @@ import matplotlib.pyplot as plt
 import logging
 from datetime import datetime
 from pathlib import Path
+import sys
+
+def run_model(s: SixS, sensor: str):
+    try:
+        logging.info(f"Python exec path: {sys.executable}")
+        logging.info(f"SixS path: {sixs_exe_path}")
+        logging.info(f"SixS path exists: {sixs_exe_path.exists()}")
+        logging.info("Attempting to run Py6S...")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
