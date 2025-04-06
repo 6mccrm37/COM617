@@ -18,7 +18,7 @@ app = FastAPI()
 # Apply CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # or restrict to ["http://localhost:8000"]
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
@@ -45,7 +45,7 @@ app.mount("/wdc", StaticFiles(directory=WDC_DIR), name="wdc")
 class Py6SParams(BaseModel):
     latitude: float
     date: str  # Format: YYYY-MM-DD
-    aot550: float = None
+    aot550_values: List[float]  # Accepts a list of AOT values
     sensor: str = "landsat_etm"  # or "vnir"
 
 # Core model setup function
@@ -60,73 +60,65 @@ def setup_model(lat: float, date: str, ground_type=GroundReflectance.GreenVegeta
 
 # Model runner function
 def run_model(s: SixS, sensor: str):
-    try:
-        logging.info(f"Python exec path: {sys.executable}")
-        logging.info(f"SixS path: {sixs_exe_path}")
-        logging.info(f"SixS path exists: {sixs_exe_path.exists()}")
-        logging.info("Attempting to run Py6S...")
+    s.run()
+    if s.outputs is None:
+        raise RuntimeError("Py6S returned no output")
 
-        s.run()
+    saved_outputs = s.outputs
 
-        if s.outputs is None:
-            logging.error("Py6S run completed but outputs are None. Possible input or SixS path error.")
-            return {"error": "Py6S did not return any outputs. Please check your SixS executable or input parameters."}
+    if sensor == "landsat_etm":
+        wavelengths, radiance = SixSHelpers.Wavelengths.run_landsat_etm(s, output_name='apparent_radiance')
+    elif sensor == "vnir":
+        wavelengths, radiance = SixSHelpers.Wavelengths.run_vnir(s, output_name='apparent_radiance')
+    else:
+        raise ValueError("Unsupported sensor type")
 
-        saved_outputs = s.outputs  # Save outputs before helper overwrites them
-        logging.info("Py6S returned outputs: Reflectance = %s", saved_outputs.apparent_reflectance)
+    return {
+        "wavelengths": list(wavelengths),
+        "radiance": list(radiance),
+        "apparent_reflectance": float(saved_outputs.apparent_reflectance),
+        "apparent_radiance": float(saved_outputs.apparent_radiance),
+        "water_vapour_transmittance_downward": float(saved_outputs.transmittance_water.downward)
+    }
 
-        if sensor == "landsat_etm":
-            wavelengths, radiance = SixSHelpers.Wavelengths.run_landsat_etm(s, output_name='apparent_radiance')
-        elif sensor == "vnir":
-            wavelengths, radiance = SixSHelpers.Wavelengths.run_vnir(s, output_name='apparent_radiance')
-        else:
-            return {"error": "Unsupported sensor type"}
+# New endpoint for multiple simulations
+@app.post("/run-multi")
+def run_multi_model(params: Py6SParams):
+    all_results = []
 
-        return {
-            "wavelengths": list(wavelengths),
-            "radiance": list(radiance),
-            "key_outputs": {
-                "apparent_reflectance": float(saved_outputs.apparent_reflectance),
-                "apparent_radiance": float(saved_outputs.apparent_radiance),
-                "water_vapour_transmittance_downward": float(saved_outputs.transmittance_water.downward)
-            }
-        }
-    except Exception as e:
-        logging.error("Model failed: %s", e)
-        return {"error": str(e)}
+    for aot in params.aot550_values:
+        try:
+            model = setup_model(params.latitude, params.date, aot550=aot)
+            result = run_model(model, params.sensor)
 
-# API endpoint to run model
-@app.post("/run-model")
-def run_py6s_model(params: Py6SParams):
-    model = setup_model(params.latitude, params.date, aot550=params.aot550)
-    result = run_model(model, params.sensor)
-    return result
+            for wl, rad in zip(result["wavelengths"], result["radiance"]):
+                all_results.append({
+                    "wavelength": wl,
+                    "radiance": rad,
+                    "aot550": aot
+                })
+        except Exception as e:
+            logging.error(f"Failed for AOT={aot}: {e}")
+            continue
+
+    return {"data": all_results}
 
 # API endpoint to export results as CSV
 @app.post("/export-csv")
 def export_csv(params: Py6SParams):
-    model = setup_model(params.latitude, params.date, aot550=params.aot550)
-    result = run_model(model, params.sensor)
+    all_results = run_multi_model(params)["data"]
 
-    if "error" in result:
-        logging.warning("Model returned an error: %s", result["error"])
-        return result
-
-    # Generate filename
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"py6s_export_{timestamp}.csv"
     filepath = EXPORT_DIR / filename
 
     logging.info("Attempting to write CSV to: %s", filepath)
 
-    # Write to CSV
     with open(filepath, mode='w', newline='') as file:
-        writer = csv.writer(file)
-        writer.writerow(["wavelength", "radiance"])
-        for wl, rad in zip(result["wavelengths"], result["radiance"]):
-            writer.writerow([wl, rad])
-
-    logging.info("Exported CSV to %s", filepath)
+        writer = csv.DictWriter(file, fieldnames=["wavelength", "radiance", "aot550"])
+        writer.writeheader()
+        for row in all_results:
+            writer.writerow(row)
 
     return {"message": "CSV exported successfully", "file": str(filepath)}
 

@@ -1,79 +1,87 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Py6S Tableau Web Data Connector</title>
-  <script src="https://connectors.tableau.com/libs/tableauwdc-2.3.latest.js"></script>
+  <title>Py6S Tableau WDC</title>
+  <script src="https://connectors.tableau.com/libs/tableauwdc-2.3.0.js"></script>
 </head>
 <body>
-  <h1>Py6S Data Connector</h1>
-  <form id="py6s-form">
-    <label>Latitude: <input type="number" id="latitude" step="0.01" value="50"></label><br>
-    <label>Date (YYYY-MM-DD): <input type="text" id="date" value="2024-07-14"></label><br>
-    <label>AOT550: <input type="number" id="aot550" step="0.1" value="0.1"></label><br>
-    <label>Sensor:
-      <select id="sensor">
-        <option value="landsat_etm">Landsat ETM</option>
-        <option value="vnir">VNIR</option>
-      </select>
-    </label><br><br>
-    <button type="button" onclick="submitToTableau()">Load Data in Tableau</button>
-  </form>
+  <h2>Py6S Model Connector</h2>
+
+  <label>Latitude:
+    <input type="number" id="latitude" value="50" />
+  </label>
+  <br>
+  <label>Date (YYYY-MM-DD):
+    <input type="text" id="date" value="2024-07-14" />
+  </label>
+  <br>
+  <label>AOT550 Values (comma-separated):
+    <input type="text" id="aot550" value="0.1,0.5,1.0" />
+  </label>
+  <br>
+  <label>Sensor:
+    <select id="sensor">
+      <option value="landsat_etm">Landsat ETM</option>
+      <option value="vnir">VNIR</option>
+    </select>
+  </label>
+  <br><br>
+
+  <button onclick="submitForm()">Load Data in Tableau</button>
 
   <script>
-    function submitToTableau() {
-      var latitude = parseFloat(document.getElementById('latitude').value);
-      var date = document.getElementById('date').value;
-      var aot550 = parseFloat(document.getElementById('aot550').value);
-      var sensor = document.getElementById('sensor').value;
+    function submitForm() {
+      const latitude = parseFloat(document.getElementById("latitude").value);
+      const date = document.getElementById("date").value;
+      const aot550_values = document.getElementById("aot550").value.split(',').map(Number);
+      const sensor = document.getElementById("sensor").value;
 
-      tableau.connectionName = "Py6S Radiance Data";
-      tableau.connectionData = JSON.stringify({ latitude, date, aot550, sensor });
+      tableau.connectionData = JSON.stringify({
+        latitude,
+        date,
+        aot550_values,
+        sensor
+      });
+
+      tableau.connectionName = "Py6S Multi-AOT Connector";
       tableau.submit();
     }
 
-    var myConnector = tableau.makeConnector();
+    const myConnector = tableau.makeConnector();
 
     myConnector.getSchema = function (schemaCallback) {
-      var cols = [
-        { id: "wavelength", alias: "Wavelength (μm)", dataType: tableau.dataTypeEnum.float },
-        { id: "radiance", alias: "Radiance (W/m²/sr/μm)", dataType: tableau.dataTypeEnum.float }
+      const cols = [
+        { id: "wavelength", dataType: tableau.dataTypeEnum.float },
+        { id: "radiance", dataType: tableau.dataTypeEnum.float },
+        { id: "aot550", dataType: tableau.dataTypeEnum.float }
       ];
-      var tableSchema = {
-        id: "py6sRadiance",
-        alias: "Radiance vs Wavelength",
-        columns: cols
-      };
-      schemaCallback([tableSchema]);
+
+      schemaCallback([
+        {
+          id: "py6s_results",
+          alias: "Radiance by Wavelength and AOT",
+          columns: cols
+        }
+      ]);
     };
 
     myConnector.getData = function (table, doneCallback) {
-      var params = JSON.parse(tableau.connectionData);
-      fetch("/run-model", {
+      const data = JSON.parse(tableau.connectionData);
+
+      fetch("http://localhost:8000/run-multi", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(params)
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data)
       })
-      .then(response => response.json())
-      .then(data => {
-        if (data.error) {
-          tableau.abortWithError("Py6S model error: " + data.error);
-          return;
-        }
-        var tableData = [];
-        for (var i = 0; i < data.wavelengths.length; i++) {
-          tableData.push({
-            wavelength: data.wavelengths[i],
-            radiance: data.radiance[i]
-          });
-        }
-        table.appendRows(tableData);
-        doneCallback();
-      })
-      .catch(error => {
-        tableau.abortWithError("Request failed: " + error);
-      });
+        .then(res => res.json())
+        .then(json => {
+          table.appendRows(json.data);
+          doneCallback();
+        })
+        .catch(err => {
+          console.error("Fetch error:", err);
+          tableau.abortWithError("Failed to fetch data.");
+        });
     };
 
     tableau.registerConnector(myConnector);
