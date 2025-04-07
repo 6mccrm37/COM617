@@ -48,6 +48,22 @@ class Py6SParams(BaseModel):
     aot550_values: List[float]  # Accepts a list of AOT values
     sensor: str = "landsat_etm"  # or "vnir"
 
+# Utility to write results to CSV
+def write_csv(data, filename_prefix="py6s_export"):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.csv"
+    filepath = EXPORT_DIR / filename
+
+    logging.info("Writing CSV to: %s", filepath)
+
+    with open(filepath, mode='w', newline='') as file:
+        writer = csv.DictWriter(file, fieldnames=["wavelength", "radiance", "aot550"])
+        writer.writeheader()
+        for row in data:
+            writer.writerow(row)
+
+    return str(filepath)
+
 # Core model setup function
 def setup_model(lat: float, date: str, ground_type=GroundReflectance.GreenVegetation, aot550=None):
     logging.info(f"Running model with lat={lat}, date={date}, aot550={aot550}")
@@ -83,7 +99,7 @@ def run_model(s: SixS, sensor: str):
 
 # New endpoint for multiple simulations
 @app.post("/run-multi")
-def run_multi_model(params: Py6SParams):
+def run_multi_endpoint(params: Py6SParams):
     all_results = []
 
     for aot in params.aot550_values:
@@ -101,26 +117,15 @@ def run_multi_model(params: Py6SParams):
             logging.error(f"Failed for AOT={aot}: {e}")
             continue
 
-    return {"data": all_results}
+    csv_path = write_csv(all_results)
+    return {"data": all_results, "csv_file": csv_path}
 
 # API endpoint to export results as CSV
 @app.post("/export-csv")
 def export_csv(params: Py6SParams):
-    all_results = run_multi_model(params)["data"]
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"py6s_export_{timestamp}.csv"
-    filepath = EXPORT_DIR / filename
-
-    logging.info("Attempting to write CSV to: %s", filepath)
-
-    with open(filepath, mode='w', newline='') as file:
-        writer = csv.DictWriter(file, fieldnames=["wavelength", "radiance", "aot550"])
-        writer.writeheader()
-        for row in all_results:
-            writer.writerow(row)
-
-    return {"message": "CSV exported successfully", "file": str(filepath)}
+    all_results = run_multi_endpoint(params)["data"]
+    csv_path = write_csv(all_results)
+    return {"message": "CSV exported successfully", "file": csv_path}
 
 # Serve WDC entrypoint
 @app.get("/wdc/connector.html", response_class=HTMLResponse)
@@ -131,3 +136,14 @@ def serve_wdc():
             return f.read()
     else:
         return HTMLResponse(content="<h1>WDC not found</h1>", status_code=404)
+
+# Health check route
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Py6S FastAPI backend running"}
+
+# Version info
+VERSION = "0.1.0"
+@app.get("/version")
+def version():
+    return {"version": VERSION}
